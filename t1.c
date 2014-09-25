@@ -11,13 +11,13 @@ struct worker {
     op freequeue;
 };
 
-#define CONCURRENCY 4
+#define CONCURRENCY 12
 
 static int val(char x)
 {
-    if ((x > '0') && (x < '9')) return(x - '0');
-    if ((x > 'a') && (x < 'f')) return(x - 'a' + 10);
-    if ((x > 'A') && (x < 'F')) return(x - 'A' + 10);
+    if ((x >= '0') && (x <= '9')) return(x - '0');
+    if ((x >= 'a') && (x <= 'f')) return(x - 'a' + 10);
+    if ((x >= 'A') && (x <= 'F')) return(x - 'A' + 10);
     return(-1);
 }
 
@@ -46,15 +46,14 @@ void release_op(worker w, op o) {
 
 
 uint64_t time;
-uint64_t enq = 5000;
+uint64_t enq = 1000;
 // this guy can go negative
-int64_t deq = 5000;
+int64_t deq = 1000;
 uint64_t search_r = 0;
 uint64_t search_w = 0;
 uint64_t collisions = 0;
 uint64_t boundary = 0;
 uint64_t in_search = 0;
-uint64_t report = 0;
 
 uint64_t max_issued; 
 uint64_t epoch; 
@@ -113,8 +112,6 @@ void enqueue(worker w)
     insert(w->pending, tag, o);
 }
 
-void dequeue(worker); 
-
 void delete_complete(worker w, op o)
 {
     if (o->status == HYPERDEX_CLIENT_SUCCESS) {
@@ -164,8 +161,6 @@ void search_complete(worker w, op o)
         uint64_t t = 0;
         for (int i = 0 ; i < 16; i++)
             t = t*16 + val(r->value[i]);
-        
-        sscanf(r->value, "%016lx", &t);
 
         add_search(t);
         hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
@@ -198,6 +193,7 @@ void start_search(worker w)
 void run_worker()
 {
     struct worker w;
+    int loop_count = 0;
     w.client = hyperdex_client_create("127.0.0.1", 1982);
     w.pending = allocate_table(CONCURRENCY);
     w.freequeue = 0;
@@ -208,6 +204,10 @@ void run_worker()
     start_search(&w);
 
     while (enq || (deq > 0) || w.pending->count) {
+        if (!(loop_count++)  % 10){
+            
+        }
+
         if (w.pending->count < CONCURRENCY) {
             if (enq) enqueue(&w);
             if (deq > 0) {
