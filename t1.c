@@ -38,15 +38,15 @@ void release_op(worker w, op o) {
 
 
 uint64_t time;
-uint64_t enq = 1000;
+uint64_t enq = 10000;
 // this guy can go negative
-int64_t deq = 1000;
+int64_t deq = 10000;
 uint64_t search_r = 0;
 uint64_t search_w = 0;
 uint64_t collisions = 0;
 uint64_t boundary = 0;
 uint64_t in_search = 0;
-
+uint64_t reported = 0;
 uint64_t max_issued; 
 uint64_t epoch; 
 uint64_t tick_base; 
@@ -235,8 +235,12 @@ void run_worker()
     start_search(&w);
 
     while (enq || (deq > 0) || w.pending->count) {
-        if (!(loop_count++)  % 10){
-            
+        if (!(loop_count++ % 5)){
+            struct timeval now;
+            gettimeofday(&now, 0);        
+            if (__sync_bool_compare_and_swap(&reported, now.tv_sec - 1, now.tv_sec)) {
+                printf ("enc: %ld deq: %ld\n", enq, deq);
+            }
         }
 
         if (w.pending->count < CONCURRENCY) {
@@ -275,6 +279,7 @@ int main(int argc, char **argv)
     //    epoch = x.tv_sec - 1411671753;
     //    tick_base = tick();
 
+    reported = start.tv_sec;
     run_worker();
     printf ("collisions: %ld\n", collisions);
     gettimeofday(&end, 0);
