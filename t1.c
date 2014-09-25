@@ -48,6 +48,7 @@ uint64_t in_search = 0;
 uint64_t reported = 0;
 uint64_t max_issued; 
 uint64_t epoch; 
+uint64_t searches = 0;
 uint64_t tick_base; 
 uint64_t last_search_reported; 
 
@@ -203,6 +204,7 @@ void start_search(worker w)
     o->f = search_complete;
     int len = QUEUE_DEPTH - (search_w - search_r) - 1;
     if (len > (QUEUE_DEPTH /4)) {
+        searches++;
         __sync_fetch_and_add (&in_search, 1);
         o->check.attr = "id";
         o->check.value_sz = encode_time_bin(o->name, last_search_reported);
@@ -242,7 +244,8 @@ void run_worker()
             struct timeval now;
             gettimeofday(&now, 0);        
             if (__sync_bool_compare_and_swap(&reported, now.tv_sec - 1, now.tv_sec)) {
-                printf ("enc: %ld deq: %ld\n", enq, deq);
+                printf ("enc: %ld deq: %ld searches: %d queue :%d\n", 
+                        enq, deq, searches, (int)(search_w - search_r));
             }
         }
 
