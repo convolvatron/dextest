@@ -46,13 +46,15 @@ void release_op(worker w, op o) {
 
 
 uint64_t time;
-uint64_t enq = 10000;
+uint64_t enq = 5000;
 // this guy can go negative
-int64_t deq = 10000;
+int64_t deq = 5000;
 uint64_t search_r = 0;
 uint64_t search_w = 0;
 uint64_t collisions = 0;
 uint64_t boundary = 0;
+uint64_t in_search = 0;
+uint64_t report = 0;
 
 uint64_t max_issued; 
 uint64_t epoch; 
@@ -120,7 +122,6 @@ void delete_complete(worker w, op o)
     }
 
     if (o->status == HYPERDEX_CLIENT_NOTFOUND) {
-        printf ("del collision\n");
         __sync_fetch_and_add (&collisions, 1);
     }
 
@@ -132,8 +133,6 @@ void start_delete(worker w, uint64_t t)
     op od = allocate_op(w);
     uint64_t size = sprintf(od->name, "%016lx", t);
 
-    printf ("start delete: %ld %lx %lx %lx %lx\n", deq, t, boundary, search_r, search_w);
-    
     uint64_t tag = hyperdex_client_del(w->client, "messages", 
                                        od->name, size,
                                        &od->status);
@@ -149,8 +148,7 @@ void search_complete(worker w, op o)
 {
     if (o->status == HYPERDEX_CLIENT_SEARCHDONE) {
         release_op(w, o);
-        // we're shutting down
-        if (deq > 0) start_search(w);
+        __sync_fetch_and_sub (&in_search, 1);
         return;
     }
 
@@ -180,19 +178,20 @@ void start_search(worker w)
     op o = allocate_op(w);
     o->f = search_complete;
     int len = QUEUE_DEPTH - (search_w - search_r) - 1;
-    if (len == 0)
-        printf ("search zero\n");
-    uint64_t tag = hyperdex_client_sorted_search(w->client,
-                                                 "messages",
-                                                 NULL, 
-                                                 0,
-                                                 "id",
-                                                 len,
-                                                 0, // minimize
-                                                 &o->status,
-                                                 (const struct hyperdex_client_attribute **)&o->result,
-                                                 &o->result_size);
-    insert(w->pending, tag, o);
+    if (len > (QUEUE_DEPTH /4)) {
+        __sync_fetch_and_add (&in_search, 1);
+        uint64_t tag = hyperdex_client_sorted_search(w->client,
+                                                     "messages",
+                                                     NULL, 
+                                                     0,
+                                                     "id",
+                                                     len,
+                                                     0, // minimize
+                                                     &o->status,
+                                                     (const struct hyperdex_client_attribute **)&o->result,
+                                                     &o->result_size);
+        insert(w->pending, tag, o);
+    }
 }
 
 
@@ -216,6 +215,8 @@ void run_worker()
                 if (t != QUEUE_EMPTY) 
                     start_delete(&w, t);
             }
+            if (!in_search)
+                start_search(&w);
         }
         
         uint64_t x = hyperdex_client_loop(w.client, 100, &loop_status);
@@ -238,13 +239,15 @@ void run_worker()
 
 int main(int argc, char **argv)
 {
-    struct timeval x;
-    gettimeofday(&x, 0);
-    epoch = x.tv_sec - 1411671753;
-    tick_base = tick();
+    struct timeval start, end;
+    gettimeofday(&start, 0);
+    //    epoch = x.tv_sec - 1411671753;
+    //    tick_base = tick();
 
     run_worker();
-    printf ("collisions: %d\n", collisions);
+    printf ("collisions: %ld\n", collisions);
+    gettimeofday(&end, 0);
+    printf ("time: %d\n", (unsigned int)(end.tv_sec - start.tv_sec));
     return 0;
 }
 
