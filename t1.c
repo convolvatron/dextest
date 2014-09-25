@@ -44,7 +44,6 @@ int64_t deq = 10000;
 uint64_t search_r = 0;
 uint64_t search_w = 0;
 uint64_t collisions = 0;
-uint64_t boundary = 0;
 uint64_t in_search = 0;
 uint64_t reported = 0;
 uint64_t max_issued; 
@@ -117,10 +116,7 @@ uint64_t remove_search()
 
     while(r = search_r, w = search_w, tag = queue[r & (QUEUE_DEPTH - 1)], r!= w){
         if (__sync_bool_compare_and_swap(&search_r, r, r+1)) {
-            if (tag > boundary){
-                boundary = tag;
-                return(tag);
-            }
+            return(tag);
         }
     }
 
