@@ -49,6 +49,7 @@ uint64_t reported = 0;
 uint64_t max_issued; 
 uint64_t epoch; 
 uint64_t searches = 0;
+uint64_t search_results = 0;
 uint64_t tick_base; 
 uint64_t last_search_reported; 
 
@@ -192,6 +193,7 @@ void search_complete(worker w, op o)
         struct hyperdex_client_attribute *r = &o->result[0];
         uint64_t t=decode_time_bin((unsigned char *)r->value);
         last_search_reported = t;
+        search_results ++;
         add_search(t);
         hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
                                       o->result_size);
@@ -200,6 +202,7 @@ void search_complete(worker w, op o)
 
 void start_search(worker w)
 {
+    static int loop_count = 0;
     op o = allocate_op(w);
     o->f = search_complete;
     int len = QUEUE_DEPTH - (search_w - search_r) - 1;
@@ -207,7 +210,8 @@ void start_search(worker w)
         searches++;
         __sync_fetch_and_add (&in_search, 1);
         o->check.attr = "id";
-        o->check.value_sz = encode_time_bin(o->name, last_search_reported);
+        o->check.value_sz = encode_time_bin(o->name, 
+                                            (loop_count++ % 10)==0?last_search_reported:0);
         o->check.value = o->name;
         o->check.datatype = HYPERDATATYPE_STRING;
         o->check.predicate = HYPERPREDICATE_GREATER_THAN;
@@ -243,11 +247,13 @@ void run_worker()
         if (!(loop_count++ % 5)){
             struct timeval now;
             gettimeofday(&now, 0);        
-            if (__sync_bool_compare_and_swap(&reported, now.tv_sec - 1, now.tv_sec)) {
-                printf ("enc: %ld deq: %ld searches: %d queue :%d\n", 
-                        enq, deq, searches, (int)(search_w - search_r));
-            }
+            if (reported < now.tv_sec) 
+                if (__sync_bool_compare_and_swap(&reported, reported, now.tv_sec)) {
+                    printf ("enc: %ld deq: %ld searches: %ld queue :%d search results %ld\n", 
+                            enq, deq, searches, (int)(search_w - search_r), search_results);
+                }
         }
+
 
         if (w.pending->count < CONCURRENCY) {
             if (enq) enqueue(&w);
@@ -282,8 +288,6 @@ int main(int argc, char **argv)
 {
     struct timeval start, end;
     gettimeofday(&start, 0);
-    //    epoch = x.tv_sec - 1411671753;
-    //    tick_base = tick();
 
     reported = start.tv_sec;
     run_worker();
