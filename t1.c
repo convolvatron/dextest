@@ -29,8 +29,8 @@ void release_op(worker w, op o) {
 
 
 uint64_t time;
-int enq = 1000;
-int deq = 1000;
+int enq = 100;
+int deq = 100;
 
 void enqueue(worker w)
 {
@@ -42,7 +42,7 @@ void enqueue(worker w)
     uint64_t tag = hyperdex_client_put(w->client, "messages", 
                                        o->name, 8,
                                        NULL, 0, &o->status);
-    insert(w->pending, o->tag, o);
+    insert(w->pending, tag, o);
 }
 
 void dequeue(worker); 
@@ -52,6 +52,7 @@ void delete_complete(worker w, op o)
     if (o->status == HYPERDEX_CLIENT_NOTFOUND) {
         dequeue(w);
     } else {
+        printf ("del complete %d\n", deq);
         __sync_fetch_and_sub (&deq, 1);
     }
     release_op(w, o);
@@ -63,8 +64,16 @@ void search_complete(worker w, op o)
     // result from the sorted search. its not all clear 
     // how this gets cleaned up or terminated
 
+    if (o->status == HYPERDEX_CLIENT_SEARCHDONE) {
+        release_op(w, o);
+        return;
+    }
+
     if (o->status != HYPERDEX_CLIENT_SUCCESS) {
         printf ("search failure\n");
+        // apparently non-success is the end of the pipe
+        release_op(w, o);
+        return;
     }
 
     if (o->result_size > 1) {
@@ -72,15 +81,13 @@ void search_complete(worker w, op o)
         char *k;
         op od = allocate_op(w);
         uint64_t tag = hyperdex_client_del(w->client, "messages", 
-                                   r[0].value, r[0].value_sz,
-                                   &od->status);
+                                           r[0].value, r[0].value_sz,
+                                           &od->status);
         insert(w->pending, tag, od);
-        o->f = delete_complete;
+        od->f = delete_complete;
+        hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
+                                      o->result_size);
     }
-
-    hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
-                                  o->result_size);
-    release_op(w, o);
 }
 
 void dequeue(worker w)
@@ -88,6 +95,7 @@ void dequeue(worker w)
     int result_count = 1;
     op o = allocate_op(w);
     o->f = search_complete;
+
     uint64_t tag = hyperdex_client_sorted_search(w->client,
                                                  "messages",
                                                  NULL, 
@@ -108,28 +116,32 @@ void run_worker()
     w.client = hyperdex_client_create("127.0.0.1", 1982);
     w.pending = malloc(sizeof(struct table));
     w.pending->bucket_length = CONCURRENCY;
+    w.freequeue = 0;
     allocate_table(w.pending);
 
     enum hyperdex_client_returncode loop_status;
 
-    while (enq || deq || w.pending->count) {
+    while (enq || (deq > 0) || w.pending->count) {
         if (w.pending->count < CONCURRENCY) {
             if (enq) {
                 enqueue(&w);
             } else 
-                if (deq) dequeue(&w);
+                if (deq > 0) dequeue(&w);
         }
 
         uint64_t x = hyperdex_client_loop(w.client, 100, &loop_status);
-        
-        if (loop_status !=  HYPERDEX_CLIENT_SUCCESS)
-            printf ("loop error %d\n", loop_status);
-        
-        op o = get(w.pending, x);
-        if (o) {
-            o->f(&w, o);
-        } else {
-            printf ("missing tag\n");
+
+        if (loop_status != HYPERDEX_CLIENT_NONEPENDING) {        
+            if (loop_status !=  HYPERDEX_CLIENT_SUCCESS) {
+                printf ("loop error %d\n", loop_status);
+            } else {
+                op o = get(w.pending, x);
+                if (o) {
+                    o->f(&w, o);
+                } else {
+                    printf ("missing tag\n");
+                }
+            }
         }
     }
     hyperdex_client_destroy(w.client);

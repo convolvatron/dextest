@@ -31,7 +31,8 @@ void insert(table t, uint64_t tag, op o) {
     if (t->count > t->bucket_length)
         resize_table(t);
     o->next = t->buckets[o->tag % t->bucket_length];
-    t->buckets[o->tag % t->bucket_length] =0;
+    t->buckets[o->tag % t->bucket_length] = o;
+    t->count++;
 }
 
 op *search(table t, uint64_t tag)   
