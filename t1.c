@@ -13,14 +13,6 @@ struct worker {
 
 #define CONCURRENCY 12
 
-static int val(char x)
-{
-    if ((x >= '0') && (x <= '9')) return(x - '0');
-    if ((x >= 'a') && (x <= 'f')) return(x - 'a' + 10);
-    if ((x >= 'A') && (x <= 'F')) return(x - 'A' + 10);
-    return(-1);
-}
-
 
 static __inline__ unsigned long long tick()
 {
@@ -74,6 +66,49 @@ void add_search(uint64_t x)
     }
 }
 
+int encode_time(char *dest, uint64_t time)
+{
+    return(sprintf(dest, "%016lx", time));
+}
+
+static int val(char x)
+{
+    if ((x >= '0') && (x <= '9')) return(x - '0');
+    if ((x >= 'a') && (x <= 'f')) return(x - 'a' + 10);
+    if ((x >= 'A') && (x <= 'F')) return(x - 'A' + 10);
+    return(-1);
+}
+
+
+uint64_t decode_time(char *source)
+{
+    uint64_t t = 0;
+    for (int i = 0 ; i < 16; i++)
+        t = t*16 + val(source[i]);
+    return(t);
+}
+
+
+int encode_time_bin(char *dest, uint64_t time)
+{
+    for (int i = 7; i>=0; i--){
+        dest[i] = time&0xff;
+        time>>=8;
+    }
+    return(8);
+}
+
+uint64_t decode_time_bin(unsigned char *source)
+{
+    uint64_t dest = 0;
+
+    for (int i=0;i<8;i++) 
+        dest = (dest<<8) + source[i];
+
+    return(dest);
+}
+
+
 // but multiple readers
 uint64_t remove_search()
 {
@@ -99,7 +134,7 @@ void enqueue(worker w)
     
     uint64_t key = tick(); // - tick_base + (epoch<<32);
 
-    int klen = sprintf(o->name, "%016lx", key);
+    int klen = encode_time_bin(o->name, key);
     __sync_fetch_and_sub (&enq, 1);
 
     if (enq == 0) 
@@ -128,8 +163,7 @@ void delete_complete(worker w, op o)
 void start_delete(worker w, uint64_t t)
 {
     op od = allocate_op(w);
-    uint64_t size = sprintf(od->name, "%016lx", t);
-
+    uint64_t size =  encode_time_bin(od->name, t);
     uint64_t tag = hyperdex_client_del(w->client, "messages", 
                                        od->name, size,
                                        &od->status);
@@ -158,11 +192,8 @@ void search_complete(worker w, op o)
 
     if (o->result_size > 1) {
         struct hyperdex_client_attribute *r = &o->result[0];
-        uint64_t t = 0;
-        for (int i = 0 ; i < 16; i++)
-            t = t*16 + val(r->value[i]);
 
-        add_search(t);
+        add_search(decode_time_bin((unsigned char *)r->value));
         hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
                                       o->result_size);
     }
