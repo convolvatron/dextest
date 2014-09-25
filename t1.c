@@ -50,6 +50,7 @@ uint64_t reported = 0;
 uint64_t max_issued; 
 uint64_t epoch; 
 uint64_t tick_base; 
+uint64_t last_search_reported; 
 
 #define QUEUE_DEPTH 128
 
@@ -60,10 +61,10 @@ uint64_t queue[QUEUE_DEPTH];
 // single writer who ever overruns
 void add_search(uint64_t x)
 {
-    if (x > boundary){
-        queue[search_w & (QUEUE_DEPTH-1) ] = x;
-        search_w++;
-    }
+    if ((search_w - search_r) > QUEUE_DEPTH) 
+        printf ("overrun!\n");
+    queue[search_w & (QUEUE_DEPTH-1) ] = x;
+    search_w++;
 }
 
 int encode_time(char *dest, uint64_t time)
@@ -192,8 +193,9 @@ void search_complete(worker w, op o)
 
     if (o->result_size > 1) {
         struct hyperdex_client_attribute *r = &o->result[0];
-
-        add_search(decode_time_bin((unsigned char *)r->value));
+        uint64_t t=decode_time_bin((unsigned char *)r->value);
+        last_search_reported = t;
+        add_search(t);
         hyperdex_client_destroy_attrs((const struct hyperdex_client_attribute *)o->result,
                                       o->result_size);
     }
@@ -206,10 +208,15 @@ void start_search(worker w)
     int len = QUEUE_DEPTH - (search_w - search_r) - 1;
     if (len > (QUEUE_DEPTH /4)) {
         __sync_fetch_and_add (&in_search, 1);
+        o->check.attr = "id";
+        o->check.value_sz = encode_time_bin(o->name, last_search_reported);
+        o->check.value = o->name;
+        o->check.datatype = HYPERDATATYPE_STRING;
+        o->check.predicate = HYPERPREDICATE_GREATER_THAN;
         uint64_t tag = hyperdex_client_sorted_search(w->client,
                                                      "messages",
-                                                     NULL, 
-                                                     0,
+                                                     &o->check, 
+                                                     1,
                                                      "id",
                                                      len,
                                                      0, // minimize
