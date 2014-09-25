@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void allocate_table(table t) {
+void reallocate_table(table t) {
     t->buckets = malloc(t->bucket_length * sizeof(op));
     memset(t->buckets, 0, t->bucket_length * sizeof(op));
 }
@@ -15,7 +15,7 @@ void resize_table(table t)
     op *old_buckets = t->buckets;
     t->bucket_length *= 2;
     t->count = 0;
-    allocate_table(t);
+    reallocate_table(t);
   
     for (int i=0; i<old_length; i++) {
         op k = 0;
@@ -51,4 +51,13 @@ void delete(table t, uint64_t tag) {
     op *j = search(t, tag);
     t->count--;
     *j = (*j)->next;
+}
+
+table allocate_table(int count)
+{
+    table t = malloc(sizeof(struct table));
+    t->bucket_length = count;
+    t->count = 0;
+    reallocate_table(t);
+    return(t);
 }
