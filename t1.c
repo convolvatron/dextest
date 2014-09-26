@@ -35,12 +35,18 @@ void release_op(worker w, op o) {
     o->next = w->freequeue;
     w->freequeue = o;
 }
-
+void check_status(worker w, op o)
+{
+    if (o->status != HYPERDEX_CLIENT_SUCCESS) {
+        printf ("bad status: %d\n", o->status);
+    }
+    release_op(w, o);
+}
 
 uint64_t time;
-uint64_t enq = 10000;
+uint64_t enq = 0;
 // this guy can go negative
-int64_t deq = 10000;
+int64_t deq = 0;
 uint64_t search_r = 0;
 uint64_t search_w = 0;
 uint64_t collisions = 0;
@@ -52,8 +58,9 @@ uint64_t searches = 0;
 uint64_t search_results = 0;
 uint64_t tick_base; 
 uint64_t last_search_reported; 
+uint64_t concurrent;
 
-#define QUEUE_DEPTH 128
+#define QUEUE_DEPTH 1024
 
 uint64_t queue[QUEUE_DEPTH];
 
@@ -139,7 +146,7 @@ void enqueue(worker w)
     if (enq == 0) 
         printf ("enqueue last submitted\n");
 
-    o->f = release_op;
+    o->f = check_status;
     uint64_t tag = hyperdex_client_put(w->client, "messages", 
                                        o->name, klen,
                                        NULL, 0, &o->status);
@@ -206,12 +213,11 @@ void start_search(worker w)
     op o = allocate_op(w);
     o->f = search_complete;
     int len = QUEUE_DEPTH - (search_w - search_r) - 1;
-    if (len > (QUEUE_DEPTH /4)) {
+    if (len > (QUEUE_DEPTH /2)) {
         searches++;
         __sync_fetch_and_add (&in_search, 1);
         o->check.attr = "id";
-        o->check.value_sz = encode_time_bin(o->name, 
-                                            (loop_count++ % 10)==0?last_search_reported:0);
+        o->check.value_sz = encode_time_bin(o->name, last_search_reported);
         o->check.value = o->name;
         o->check.datatype = HYPERDATATYPE_STRING;
         o->check.predicate = HYPERPREDICATE_GREATER_THAN;
@@ -240,9 +246,6 @@ void run_worker()
 
     enum hyperdex_client_returncode loop_status;
 
-    // should just be one guy running
-    start_search(&w);
-
     while (enq || (deq > 0) || w.pending->count) {
         if (!(loop_count++ % 5)){
             struct timeval now;
@@ -257,12 +260,12 @@ void run_worker()
 
         if (w.pending->count < CONCURRENCY) {
             if (enq) enqueue(&w);
-            if (deq > 0) {
+            if (((enq == 0) || concurrent) && (deq > 0)) {
                 uint64_t t = remove_search();
                 if (t != QUEUE_EMPTY) 
                     start_delete(&w, t);
             }
-            if (!in_search)
+            if ((!in_search) && (deq > 0))
                 start_search(&w);
         }
         
@@ -284,10 +287,51 @@ void run_worker()
     hyperdex_client_destroy(w.client);
 }
 
+struct arg {
+    char *name;
+    int isbool;
+    uint64_t *val;
+}args[] = {
+    {"-e", 0, &enq},
+    {"-d", 0, &deq},
+    {"-c", 1, &concurrent}
+};
+
+
 int main(int argc, char **argv)
 {
     struct timeval start, end;
     gettimeofday(&start, 0);
+
+    for (int i = 1; i <argc ;i++) {
+        int found = 0;
+        for (int j = 0; j < sizeof(args)/sizeof(struct arg); j++) {
+            struct arg *a = args + j;
+            int alen = strlen(a->name);
+
+            if (!strncmp(argv[i], a->name, alen)){
+                if (a->isbool)  {
+                    *a->val = 1;
+                } else {
+                    if (strlen(argv[i]) > alen) {
+                        *a->val = atoi(argv[i] + alen); 
+                    } else {
+                        if (i == argc) {
+                            printf ("missing argument\n");
+                            exit(1);
+                        }
+                        *a->val = atoi(argv[++i]);
+                    }
+                }
+                found = 1;
+            }
+        }
+        if (!found) {
+            printf ("no such arg %s\n", argv[i]);
+            exit(1);
+        }
+    }
+
 
     reported = start.tv_sec;
     run_worker();
